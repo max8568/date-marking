@@ -4,9 +4,7 @@
 
 單一頁面、無建置步驟、無相依安裝——直接用瀏覽器打開 `index.html` 就能用。
 
-```
-file:///F:/CodingTest/date-marking/index.html
-```
+線上版本：**https://max8568.github.io/date-marking/**
 
 > 需要連外網。頁面在執行期從 unpkg 載入 React / ReactDOM / Babel，離線無法運作。
 
@@ -106,8 +104,9 @@ const applied  = (days, key, mode, color) => { /* 回傳新的 days */ };
 沒有測試套件。變更後用 headless Chrome 檢查頁面仍正常掛載：
 
 ```bash
+# 從 repo 根目錄執行
 chrome --headless=new --disable-gpu --virtual-time-budget=12000 --dump-dom \
-  "file:///F:/CodingTest/date-marking/index.html"
+  "file://$PWD/index.html"
 ```
 
 輸出應含 `id="dc-root"`、不應殘留 `<x-dc>`。
