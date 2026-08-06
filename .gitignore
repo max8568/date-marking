@@ -1,0 +1,5 @@
+# Harness-created git worktrees live here; never commit their contents.
+.claude/
+
+# Working plan files from the agent session, not project source.
+plans/

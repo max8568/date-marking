@@ -69,12 +69,12 @@ body { background: #fafafa; }
             <h3 style="font-family:var(--font-heading);font-size:24px;font-weight:600;margin:0;letter-spacing:.01em">{{ g.name }}</h3>
             <span style="font-family:var(--font-heading);font-size:14px;letter-spacing:.14em;color:#9ca3af">{{ g.code }}</span>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px">
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px;user-select:none">
             <sc-for list="{{ g.heads }}" as="h" hint-placeholder-count="7">
               <div style="{{ h.style }}">{{ h.label }}</div>
             </sc-for>
             <sc-for list="{{ g.cells }}" as="c" hint-placeholder-count="35">
-              <button style="{{ c.style }}" onClick="{{ c.onClick }}" disabled="{{ c.blank }}">{{ c.label }}</button>
+              <button style="{{ c.style }}" onMouseDown="{{ c.onDown }}" onMouseEnter="{{ c.onEnter }}" onClick="{{ c.onClick }}" disabled="{{ c.blank }}">{{ c.label }}</button>
             </sc-for>
           </div>
         </div>
@@ -84,100 +84,194 @@ body { background: #fafafa; }
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;weekStart&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;SUN&quot;,&quot;MON&quot;],&quot;default&quot;:&quot;SUN&quot;,&quot;tsType&quot;:&quot;'SUN'|'MON'&quot;,&quot;section&quot;:&quot;月曆&quot;}}">
+// ── Calendar constants ──────────────────────────────────────────────────────
 const YEAR = 2026;
 const DIM = [31,28,31,30,31,30,31,31,30,31,30,31];
 const WD = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
 const MN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const ALL_MONTHS = DIM.map((_, i) => i);
+
 const PALETTE = [
   { id:'blue',   name:'藍', bg:'#DCEBFF', fg:'#3f5f8f', ring:'#C4DCFF' },
   { id:'purple', name:'紫', bg:'#E7DEFA', fg:'#6b52a8', ring:'#D6C9F5' },
   { id:'green',  name:'綠', bg:'#D6F2E3', fg:'#3d7d57', ring:'#BEE6D2' },
   { id:'yellow', name:'黃', bg:'#FFF0C5', fg:'#9a7420', ring:'#F7E3A8' }
 ];
+const BY_ID = Object.fromEntries(PALETTE.map(p => [p.id, p]));
+
+// Greys and tints shared by the styles below. The four marking colours live in
+// PALETTE; nothing else here should introduce a new hue.
+const C = {
+  text:      '#374151',
+  muted:     '#9ca3af',
+  weekend:   '#c2c7d0',
+  line:      '#ececef',
+  ground:    '#fafafa',
+  pickBg:    '#EEF5FF',
+  pickLine:  '#C4DCFF',
+  ghostText: '#6b7280'
+};
+
+const pad2 = n => String(n).padStart(2, '0');
+const dayKey = (mi, d) => YEAR + '-' + pad2(mi + 1) + '-' + pad2(d);
+const weekdayOf = (mi, d) => new Date(YEAR, mi, d).getDay();
+const isWeekend = wd => wd === 0 || wd === 6;
+
+// ── Inline styles ───────────────────────────────────────────────────────────
+// Strings rather than CSS classes because a .dc.html template binds style="",
+// which is how the runtime and the rest of this component are written.
+const headStyle = wd =>
+  'font-size:11px;font-weight:500;letter-spacing:.1em;text-align:center;padding:4px 0 8px;color:' +
+  (isWeekend(wd) ? C.weekend : C.muted);
+
+const DAY_BASE = 'appearance:none;border:none;font-family:var(--font-body);font-size:14px;font-weight:500;line-height:1;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;border-radius:10px;transition:background .12s,color .12s,box-shadow .12s;';
+const PAD_STYLE = DAY_BASE + 'background:transparent;cursor:default;';
+
+const dayStyle = (mark, weekend) => DAY_BASE + 'cursor:pointer;' + (mark
+  ? 'background:' + mark.bg + ';color:' + mark.fg + ';font-weight:600;box-shadow:inset 0 0 0 1px ' + mark.ring + ';'
+  : 'background:transparent;color:' + (weekend ? C.weekend : C.text) + ';');
+
+const chipStyle = checked =>
+  'display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;cursor:pointer;user-select:none;transition:background .12s,box-shadow .12s;background:' +
+  (checked ? C.pickBg : C.ground) + ';box-shadow:inset 0 0 0 1px ' + (checked ? C.pickLine : C.line) + ';';
+
+const swatchStyle = (p, active) =>
+  'width:26px;height:26px;border:none;border-radius:8px;cursor:pointer;background:' + p.bg +
+  ';box-shadow:inset 0 0 0 1px ' + p.ring + (active ? ',0 0 0 2px #fff,0 0 0 3px ' + p.fg : '') + ';';
+
+const GHOST_STYLE = 'appearance:none;background:transparent;border:1px solid ' + C.line +
+  ';border-radius:8px;padding:6px 12px;font-family:var(--font-body);font-size:12px;color:' +
+  C.ghostText + ';cursor:pointer';
+
+// ── Marking rules ───────────────────────────────────────────────────────────
+// The single source of truth for what a press does to a cell, shared by the
+// click path and the drag path so the two can never drift apart: a mark
+// already in the selected colour clears, anything else takes the colour.
+const modeFor = (days, key, color) => (days[key] === color ? 'clear' : 'mark');
+
+// Idempotent, so re-entering a cell during the same drag is harmless.
+const applied = (days, key, mode, color) => {
+  const d = Object.assign({}, days);
+  if (mode === 'mark') d[key] = color; else delete d[key];
+  return d;
+};
 
 class Component extends DCLogic {
-  state = { months: [], days: {}, color: 'blue' };
+  state = { months: [], days: {}, color: 'blue', drag: null };
 
-  toggleMonth(i) {
-    this.setState(s => ({ months: s.months.includes(i) ? s.months.filter(x => x !== i) : s.months.concat(i).sort((a,b)=>a-b) }));
+  componentDidMount() {
+    // A drag can end anywhere — a gap between cells, another section, off the
+    // page — so the release is caught on the window rather than on a cell.
+    this.onWindowUp = () => this.endDrag();
+    window.addEventListener('mouseup', this.onWindowUp);
   }
+  componentWillUnmount() {
+    window.removeEventListener('mouseup', this.onWindowUp);
+  }
+
+  // ── Which months are on screen ────────────────────────────────────────────
+  toggleMonth(i) {
+    this.setState(s => ({
+      months: s.months.includes(i)
+        ? s.months.filter(x => x !== i)
+        : s.months.concat(i).sort((a, b) => a - b)
+    }));
+  }
+
+  // ── Marking: click ────────────────────────────────────────────────────────
   toggleDay(key) {
+    this.setState(s => ({ days: applied(s.days, key, modeFor(s.days, key, s.color), s.color) }));
+  }
+
+  // ── Marking: drag ─────────────────────────────────────────────────────────
+  // The anchor decides the whole stroke: press on a cell that already carries
+  // the selected colour and the drag erases, otherwise it paints.
+  startDrag(key) {
     this.setState(s => {
-      const d = Object.assign({}, s.days);
-      if (d[key]) delete d[key]; else d[key] = s.color;
-      return { days: d };
+      const mode = modeFor(s.days, key, s.color);
+      return { drag: mode, days: applied(s.days, key, mode, s.color) };
     });
   }
+  enterDay(key, e) {
+    const mode = this.state.drag;
+    if (!mode) return;
+    // The window mouseup never fires if the button was released outside the
+    // browser; buttons === 0 catches that on the way back in.
+    if (e.buttons === 0) { this.endDrag(); return; }
+    this.setState(s => ({ days: applied(s.days, key, mode, s.color) }));
+  }
+  endDrag() {
+    if (this.state.drag) this.setState({ drag: null });
+  }
 
+  // ── Render data ───────────────────────────────────────────────────────────
+  // Every value the template binds to is assembled here; the template itself
+  // holds no logic.
   renderVals() {
     const weekStart = this.props.weekStart === 'MON' ? 1 : 0;
+
+    // One shared row of weekday headings — the same for every month grid.
     const heads = [];
     for (let i = 0; i < 7; i++) {
       const wd = (i + weekStart) % 7;
-      heads.push({
-        label: WD[wd],
-        style: 'font-size:11px;font-weight:500;letter-spacing:.1em;text-align:center;padding:4px 0 8px;color:' +
-          ((wd === 0 || wd === 6) ? '#c2c7d0' : '#9ca3af')
-      });
+      heads.push({ label: WD[wd], style: headStyle(wd) });
     }
-
-    const base = 'appearance:none;border:none;font-family:var(--font-body);font-size:14px;font-weight:500;line-height:1;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;border-radius:10px;transition:background .12s,color .12s,box-shadow .12s;';
-
-    const grids = this.state.months.map(mi => {
-      const mm = String(mi + 1).padStart(2, '0');
-      const lead = (new Date(YEAR, mi, 1).getDay() - weekStart + 7) % 7;
-      const cells = [];
-      for (let i = 0; i < lead; i++) {
-        cells.push({ label: '', blank: true, onClick: null, style: base + 'background:transparent;cursor:default;' });
-      }
-      for (let d = 1; d <= DIM[mi]; d++) {
-        const key = YEAR + '-' + mm + '-' + String(d).padStart(2, '0');
-        const cid = this.state.days[key];
-        const wd = new Date(YEAR, mi, d).getDay();
-        const weekend = wd === 0 || wd === 6;
-        const c = PALETTE.find(p => p.id === cid);
-        cells.push({
-          label: String(d),
-          blank: false,
-          onClick: () => this.toggleDay(key),
-          style: base + 'cursor:pointer;' + (c
-            ? 'background:' + c.bg + ';color:' + c.fg + ';font-weight:600;box-shadow:inset 0 0 0 1px ' + c.ring + ';'
-            : 'background:transparent;color:' + (weekend ? '#c2c7d0' : '#374151') + ';')
-        });
-      }
-      return { name: MN[mi], code: YEAR + ' / ' + mm, heads: heads, cells: cells };
-    });
-
-    const months = [];
-    for (let i = 0; i < 12; i++) {
-      const checked = this.state.months.includes(i);
-      months.push({
-        label: YEAR + '/' + String(i + 1).padStart(2, '0'),
-        checked: checked,
-        toggle: () => this.toggleMonth(i),
-        chipStyle: 'display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;cursor:pointer;user-select:none;transition:background .12s,box-shadow .12s;background:' +
-          (checked ? '#EEF5FF' : '#fafafa') + ';box-shadow:inset 0 0 0 1px ' + (checked ? '#C4DCFF' : '#ececef') + ';'
-      });
-    }
-
-    const palette = PALETTE.map(p => ({
-      name: p.name,
-      pick: () => this.setState({ color: p.id }),
-      style: 'width:26px;height:26px;border:none;border-radius:8px;cursor:pointer;background:' + p.bg +
-        ';box-shadow:inset 0 0 0 1px ' + p.ring + (this.state.color === p.id ? ',0 0 0 2px #fff,0 0 0 3px ' + p.fg : '') + ';'
-    }));
 
     return {
-      months: months,
-      grids: grids,
-      palette: palette,
+      grids: this.state.months.map(mi => ({
+        name: MN[mi],
+        code: YEAR + ' / ' + pad2(mi + 1),
+        heads: heads,
+        cells: this.cellsFor(mi, weekStart)
+      })),
+
+      months: ALL_MONTHS.map(i => {
+        const checked = this.state.months.includes(i);
+        return {
+          label: YEAR + '/' + pad2(i + 1),
+          checked: checked,
+          toggle: () => this.toggleMonth(i),
+          chipStyle: chipStyle(checked)
+        };
+      }),
+
+      palette: PALETTE.map(p => ({
+        name: p.name,
+        pick: () => this.setState({ color: p.id }),
+        style: swatchStyle(p, this.state.color === p.id)
+      })),
+
       isEmpty: this.state.months.length === 0,
       markedCount: Object.keys(this.state.days).length,
-      ghostBtn: 'appearance:none;background:transparent;border:1px solid #ececef;border-radius:8px;padding:6px 12px;font-family:var(--font-body);font-size:12px;color:#6b7280;cursor:pointer',
-      selectAllMonths: () => this.setState({ months: [0,1,2,3,4,5,6,7,8,9,10,11] }),
+      ghostBtn: GHOST_STYLE,
+      selectAllMonths: () => this.setState({ months: ALL_MONTHS.slice() }),
       clearMonths: () => this.setState({ months: [] }),
       clearDays: () => this.setState({ days: {} })
     };
+  }
+
+  // Leading blanks to line day 1 up under its weekday, then one cell per day.
+  cellsFor(mi, weekStart) {
+    const cells = [];
+    const lead = (weekdayOf(mi, 1) - weekStart + 7) % 7;
+    for (let i = 0; i < lead; i++) {
+      cells.push({ label: '', blank: true, onDown: null, onEnter: null, onClick: null, style: PAD_STYLE });
+    }
+    for (let d = 1; d <= DIM[mi]; d++) {
+      const key = dayKey(mi, d);
+      cells.push({
+        label: String(d),
+        blank: false,
+        onDown: () => this.startDrag(key),
+        onEnter: e => this.enterDay(key, e),
+        // mousedown has already marked this cell, so a mouse click must not
+        // toggle it back. detail === 0 only for keyboard-activated clicks
+        // (Enter / Space), which is the path this handler exists to serve.
+        onClick: e => { if (e.detail === 0) this.toggleDay(key); },
+        style: dayStyle(BY_ID[this.state.days[key]], isWeekend(weekdayOf(mi, d)))
+      });
+    }
+    return cells;
   }
 }
 </script>
