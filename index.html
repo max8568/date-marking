@@ -31,7 +31,7 @@ body { background: #fafafa; }
 
     <section style="background:#fff;border:1px solid #eceef1;border-radius:16px;box-shadow:0 1px 2px rgba(16,24,40,.04);padding:22px 24px;display:flex;flex-direction:column;gap:18px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
-        <h2 style="font-family:var(--font-heading);font-size:17px;font-weight:600;margin:0;letter-spacing:.02em;color:#374151">選擇月份 · 2026/01 – 2026/12</h2>
+        <h2 style="font-family:var(--font-heading);font-size:17px;font-weight:600;margin:0;letter-spacing:.02em;color:#374151">選擇月份 · {{ rangeLabel }}</h2>
         <div style="display:flex;gap:6px">
           <button style="{{ ghostBtn }}" onClick="{{ selectAllMonths }}">全選</button>
           <button style="{{ ghostBtn }}" onClick="{{ clearMonths }}">清除月份</button>
@@ -49,7 +49,7 @@ body { background: #fafafa; }
       <div style="display:flex;align-items:center;gap:12px;border-top:1px solid #f1f2f4;padding-top:16px">
         <span style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af">標記顏色</span>
         <div style="display:flex;gap:8px">
-          <sc-for list="{{ palette }}" as="p" hint-placeholder-count="4">
+          <sc-for list="{{ palette }}" as="p" hint-placeholder-count="5">
             <button style="{{ p.style }}" onClick="{{ p.pick }}" title="{{ p.name }}"></button>
           </sc-for>
         </div>
@@ -85,21 +85,29 @@ body { background: #fafafa; }
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;weekStart&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;SUN&quot;,&quot;MON&quot;],&quot;default&quot;:&quot;SUN&quot;,&quot;tsType&quot;:&quot;'SUN'|'MON'&quot;,&quot;section&quot;:&quot;月曆&quot;}}">
 // ── Calendar constants ──────────────────────────────────────────────────────
-const YEAR = 2026;
-const DIM = [31,28,31,30,31,30,31,31,30,31,30,31];
+// The selectable months, in order: three before the current month, the
+// current month, and eight after — worked out once when the page loads. Each
+// entry carries its own year, since the range usually crosses a year boundary.
+const NOW = new Date();
+const MONTHS = [];
+for (let k = -3; k <= 8; k++) {
+  const d = new Date(NOW.getFullYear(), NOW.getMonth() + k, 1);
+  MONTHS.push({ y: d.getFullYear(), mi: d.getMonth() });
+}
 const WD = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
 const MN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-const ALL_MONTHS = DIM.map((_, i) => i);
+const ALL_MONTHS = MONTHS.map((_, i) => i);
 
 const PALETTE = [
   { id:'blue',   name:'藍', bg:'#DCEBFF', fg:'#3f5f8f', ring:'#C4DCFF' },
   { id:'purple', name:'紫', bg:'#E7DEFA', fg:'#6b52a8', ring:'#D6C9F5' },
   { id:'green',  name:'綠', bg:'#D6F2E3', fg:'#3d7d57', ring:'#BEE6D2' },
-  { id:'yellow', name:'黃', bg:'#FFF0C5', fg:'#9a7420', ring:'#F7E3A8' }
+  { id:'yellow', name:'黃', bg:'#FFF0C5', fg:'#9a7420', ring:'#F7E3A8' },
+  { id:'red',    name:'紅', bg:'#FFE0E0', fg:'#a34848', ring:'#F7C9C9' }
 ];
 const BY_ID = Object.fromEntries(PALETTE.map(p => [p.id, p]));
 
-// Greys and tints shared by the styles below. The four marking colours live in
+// Greys and tints shared by the styles below. The five marking colours live in
 // PALETTE; nothing else here should introduce a new hue.
 const C = {
   text:      '#374151',
@@ -113,8 +121,10 @@ const C = {
 };
 
 const pad2 = n => String(n).padStart(2, '0');
-const dayKey = (mi, d) => YEAR + '-' + pad2(mi + 1) + '-' + pad2(d);
-const weekdayOf = (mi, d) => new Date(YEAR, mi, d).getDay();
+const dayKey = (y, mi, d) => y + '-' + pad2(mi + 1) + '-' + pad2(d);
+const weekdayOf = (y, mi, d) => new Date(y, mi, d).getDay();
+const daysIn = (y, mi) => new Date(y, mi + 1, 0).getDate();
+const monthLabel = m => m.y + '/' + pad2(m.mi + 1);
 const isWeekend = wd => wd === 0 || wd === 6;
 
 // ── Inline styles ───────────────────────────────────────────────────────────
@@ -218,17 +228,20 @@ class Component extends DCLogic {
     }
 
     return {
-      grids: this.state.months.map(mi => ({
-        name: MN[mi],
-        code: YEAR + ' / ' + pad2(mi + 1),
-        heads: heads,
-        cells: this.cellsFor(mi, weekStart)
-      })),
+      grids: this.state.months.map(i => {
+        const { y, mi } = MONTHS[i];
+        return {
+          name: MN[mi],
+          code: y + ' / ' + pad2(mi + 1),
+          heads: heads,
+          cells: this.cellsFor(y, mi, weekStart)
+        };
+      }),
 
       months: ALL_MONTHS.map(i => {
         const checked = this.state.months.includes(i);
         return {
-          label: YEAR + '/' + pad2(i + 1),
+          label: monthLabel(MONTHS[i]),
           checked: checked,
           toggle: () => this.toggleMonth(i),
           chipStyle: chipStyle(checked)
@@ -241,6 +254,7 @@ class Component extends DCLogic {
         style: swatchStyle(p, this.state.color === p.id)
       })),
 
+      rangeLabel: monthLabel(MONTHS[0]) + ' – ' + monthLabel(MONTHS[MONTHS.length - 1]),
       isEmpty: this.state.months.length === 0,
       markedCount: Object.keys(this.state.days).length,
       ghostBtn: GHOST_STYLE,
@@ -251,14 +265,14 @@ class Component extends DCLogic {
   }
 
   // Leading blanks to line day 1 up under its weekday, then one cell per day.
-  cellsFor(mi, weekStart) {
+  cellsFor(y, mi, weekStart) {
     const cells = [];
-    const lead = (weekdayOf(mi, 1) - weekStart + 7) % 7;
+    const lead = (weekdayOf(y, mi, 1) - weekStart + 7) % 7;
     for (let i = 0; i < lead; i++) {
       cells.push({ label: '', blank: true, onDown: null, onEnter: null, onClick: null, style: PAD_STYLE });
     }
-    for (let d = 1; d <= DIM[mi]; d++) {
-      const key = dayKey(mi, d);
+    for (let d = 1, n = daysIn(y, mi); d <= n; d++) {
+      const key = dayKey(y, mi, d);
       cells.push({
         label: String(d),
         blank: false,
@@ -268,7 +282,7 @@ class Component extends DCLogic {
         // toggle it back. detail === 0 only for keyboard-activated clicks
         // (Enter / Space), which is the path this handler exists to serve.
         onClick: e => { if (e.detail === 0) this.toggleDay(key); },
-        style: dayStyle(BY_ID[this.state.days[key]], isWeekend(weekdayOf(mi, d)))
+        style: dayStyle(BY_ID[this.state.days[key]], isWeekend(weekdayOf(y, mi, d)))
       });
     }
     return cells;
